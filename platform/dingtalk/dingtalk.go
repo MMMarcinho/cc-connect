@@ -786,7 +786,7 @@ func (p *Platform) sendEmotion(ctx context.Context, rc replyContext, emoji strin
 	if err != nil {
 		return fmt.Errorf("dingtalk: emotion request: %w", err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	respBody, _ := io.ReadAll(resp.Body)
 	if resp.StatusCode != http.StatusOK {
