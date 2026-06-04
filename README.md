@@ -393,7 +393,7 @@ cc-connect update --pre     # Include pre-releases
 ### 💬 Session Management
 
 ```
-/new [name]       Start a new session
+/new [--dir <path>] [name]  Start a new session
 /list             List all sessions
 /switch <id>      Switch session
 /current          Show current session

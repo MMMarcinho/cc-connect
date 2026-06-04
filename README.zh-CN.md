@@ -393,7 +393,7 @@ cc-connect update --pre     # 含预发布版本
 ### 💬 会话管理
 
 ```
-/new [名称]            创建新会话
+/new [--dir <路径>] [名称] 创建新会话
 /list                  列出所有会话
 /switch <id>           切换会话
 /current               查看当前会话

@@ -4797,6 +4797,97 @@ func TestCmdDir_HelpShowsUsage(t *testing.T) {
 	}
 }
 
+func TestCmdNew_WithDirFlagSwitchesDirectoryAndCreatesNamedSession(t *testing.T) {
+	p := &stubPlatformEngine{n: "plain"}
+	baseDir := t.TempDir()
+	nextDir := filepath.Join(baseDir, "next")
+	if err := os.Mkdir(nextDir, 0o755); err != nil {
+		t.Fatalf("mkdir next dir: %v", err)
+	}
+	statePath := filepath.Join(t.TempDir(), "projects", "test.state.json")
+	store := NewProjectStateStore(statePath)
+
+	agent := &stubWorkDirAgent{workDir: baseDir}
+	e := NewEngine("test", agent, []Platform{p}, "", LangEnglish)
+	e.SetAdminFrom("*")
+	e.SetBaseWorkDir(baseDir)
+	e.SetProjectStateStore(store)
+
+	msg := &Message{SessionKey: "test:user1", UserID: "admin1", ReplyCtx: "ctx"}
+	old := e.sessions.GetOrCreateActive(msg.SessionKey)
+	old.SetAgentSessionID("existing-session", "test")
+	old.AddHistory("user", "hello")
+
+	e.cmdNew(p, msg, []string{"--dir", "next", "Fix", "bug"})
+
+	if agent.workDir != nextDir {
+		t.Fatalf("workDir = %q, want %q", agent.workDir, nextDir)
+	}
+	if old.GetAgentSessionID() != "" {
+		t.Fatalf("old AgentSessionID = %q, want cleared", old.GetAgentSessionID())
+	}
+	if old.HistoryLen() != 0 {
+		t.Fatalf("old history length = %d, want 0", old.HistoryLen())
+	}
+	active := e.sessions.GetOrCreateActive(msg.SessionKey)
+	if active == old {
+		t.Fatal("active session was not rotated")
+	}
+	if active.GetName() != "Fix bug" {
+		t.Fatalf("active name = %q, want %q", active.GetName(), "Fix bug")
+	}
+	reloaded := NewProjectStateStore(statePath)
+	if got := reloaded.WorkDirOverride(); got != nextDir {
+		t.Fatalf("WorkDirOverride() = %q, want %q", got, nextDir)
+	}
+	if len(p.sent) != 1 || !strings.Contains(p.sent[0], "Fix bug") || !strings.Contains(p.sent[0], nextDir) {
+		t.Fatalf("sent = %v, want new session and directory confirmation", p.sent)
+	}
+}
+
+func TestCmdNew_WithDirFlagRequiresDirPrivilege(t *testing.T) {
+	p := &stubPlatformEngine{n: "plain"}
+	baseDir := t.TempDir()
+	nextDir := filepath.Join(baseDir, "next")
+	if err := os.Mkdir(nextDir, 0o755); err != nil {
+		t.Fatalf("mkdir next dir: %v", err)
+	}
+	agent := &stubWorkDirAgent{workDir: baseDir}
+	e := NewEngine("test", agent, []Platform{p}, "", LangEnglish)
+	msg := &Message{SessionKey: "test:user1", UserID: "user1", ReplyCtx: "ctx"}
+	old := e.sessions.GetOrCreateActive(msg.SessionKey)
+
+	e.cmdNew(p, msg, []string{"--dir", "next", "blocked"})
+
+	if agent.workDir != baseDir {
+		t.Fatalf("workDir = %q, want unchanged %q", agent.workDir, baseDir)
+	}
+	if active := e.sessions.GetOrCreateActive(msg.SessionKey); active != old {
+		t.Fatal("active session changed without /dir privilege")
+	}
+	if len(p.sent) != 1 || !strings.Contains(strings.ToLower(p.sent[0]), "admin") {
+		t.Fatalf("sent = %v, want admin required reply", p.sent)
+	}
+}
+
+func TestCmdNew_DirFlagMissingPathShowsUsage(t *testing.T) {
+	p := &stubPlatformEngine{n: "plain"}
+	agent := &stubWorkDirAgent{workDir: t.TempDir()}
+	e := NewEngine("test", agent, []Platform{p}, "", LangEnglish)
+	e.SetAdminFrom("*")
+	msg := &Message{SessionKey: "test:user1", UserID: "admin1", ReplyCtx: "ctx"}
+	old := e.sessions.GetOrCreateActive(msg.SessionKey)
+
+	e.cmdNew(p, msg, []string{"--dir"})
+
+	if active := e.sessions.GetOrCreateActive(msg.SessionKey); active != old {
+		t.Fatal("active session changed when /new --dir was missing a path")
+	}
+	if len(p.sent) != 1 || !strings.Contains(p.sent[0], "/new [--dir <path>]") {
+		t.Fatalf("sent = %v, want /new usage", p.sent)
+	}
+}
+
 func TestCmdDir_PersistsAbsoluteOverride(t *testing.T) {
 	p := &stubPlatformEngine{n: "plain"}
 	baseDir := t.TempDir()

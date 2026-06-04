@@ -31,7 +31,7 @@ Each user gets an independent session with full conversation context. Manage ses
 
 | Command | Description |
 |---------|-------------|
-| `/new [name]` | Start a new session |
+| `/new [--dir <path>] [name]` | Start a new session, optionally in another work directory |
 | `/list` | List all agent sessions for this project |
 | `/switch <id>` | Switch to a different session |
 | `/current` | Show current session info |

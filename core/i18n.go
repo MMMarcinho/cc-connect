@@ -390,12 +390,12 @@ const (
 	MsgPermCardBody    MsgKey = "perm_card_body"
 	MsgPermCardNote    MsgKey = "perm_card_note"
 
-	MsgAskQuestionTitle    MsgKey = "ask_question_title"
+	MsgAskQuestionTitle     MsgKey = "ask_question_title"
 	MsgAskQuestionNote      MsgKey = "ask_question_note"
 	MsgAskQuestionNoteMulti MsgKey = "ask_question_note_multi"
 	MsgAskQuestionMulti     MsgKey = "ask_question_multi"
-	MsgAskQuestionPrompt   MsgKey = "ask_question_prompt"
-	MsgAskQuestionAnswered MsgKey = "ask_question_answered"
+	MsgAskQuestionPrompt    MsgKey = "ask_question_prompt"
+	MsgAskQuestionAnswered  MsgKey = "ask_question_answered"
 
 	MsgCommandsTitle        MsgKey = "commands_title"
 	MsgCommandsEmpty        MsgKey = "commands_empty"
@@ -456,6 +456,7 @@ const (
 
 	MsgNewSessionCreated      MsgKey = "new_session_created"
 	MsgNewSessionCreatedName  MsgKey = "new_session_created_name"
+	MsgNewSessionUsage        MsgKey = "new_session_usage"
 	MsgSessionAutoResetIdle   MsgKey = "session_auto_reset_idle"
 	MsgSessionClosingGraceful MsgKey = "session_closing_graceful"
 
@@ -945,7 +946,7 @@ var messages = map[MsgKey]map[Language]string{
 	},
 	MsgHelp: {
 		LangEnglish: "📖 Available Commands\n\n" +
-			"/new [name]\n  Start a new session\n\n" +
+			"/new [--dir <path>] [name]\n  Start a new session, optionally in another work directory\n\n" +
 			"/list\n  List agent sessions\n\n" +
 			"/search <keyword>\n  Search sessions by name or ID\n\n" +
 			"/switch <number>\n  Resume a session by its list number\n\n" +
@@ -988,7 +989,7 @@ var messages = map[MsgKey]map[Language]string{
 			"Agent skills: auto-discovered from .claude/skills/<name>/SKILL.md etc.\n\n" +
 			"Permission modes: default / edit / plan / yolo",
 		LangChinese: "📖 可用命令\n\n" +
-			"/new [名称]\n  创建新会话\n\n" +
+			"/new [--dir <路径>] [名称]\n  创建新会话，可指定工作目录\n\n" +
 			"/list\n  列出 Agent 会话列表\n\n" +
 			"/search <关键词>\n  搜索会话名称或 ID\n\n" +
 			"/switch <序号>\n  按列表序号切换会话\n\n" +
@@ -1031,7 +1032,7 @@ var messages = map[MsgKey]map[Language]string{
 			"Agent Skills：自动发现自 .claude/skills/<name>/SKILL.md 等目录。\n\n" +
 			"权限模式：default / edit / plan / yolo",
 		LangTraditionalChinese: "📖 可用命令\n\n" +
-			"/new [名稱]\n  建立新會話\n\n" +
+			"/new [--dir <路徑>] [名稱]\n  建立新會話，可指定工作目錄\n\n" +
 			"/list\n  列出 Agent 會話列表\n\n" +
 			"/search <關鍵詞>\n  搜尋會話名稱或 ID\n\n" +
 			"/switch <序號>\n  按列表序號切換會話\n\n" +
@@ -1073,7 +1074,7 @@ var messages = map[MsgKey]map[Language]string{
 			"Agent Skills：自動發現自 .claude/skills/<name>/SKILL.md 等目錄。\n\n" +
 			"權限模式：default / edit / plan / yolo",
 		LangJapanese: "📖 利用可能なコマンド\n\n" +
-			"/new [名前]\n  新しいセッションを開始\n\n" +
+			"/new [--dir <パス>] [名前]\n  新しいセッションを開始し、必要に応じて作業ディレクトリを指定\n\n" +
 			"/list\n  エージェントセッション一覧\n\n" +
 			"/switch <番号>\n  リスト番号でセッションを切り替え\n\n" +
 			"/delete <番号>|1,2,3|3-7|1,3-5,8\n  リスト番号でセッションを単体/複数削除\n\n" +
@@ -1114,7 +1115,7 @@ var messages = map[MsgKey]map[Language]string{
 			"エージェントスキル: .claude/skills/<name>/SKILL.md などから自動検出。\n\n" +
 			"権限モード: default / edit / plan / yolo",
 		LangSpanish: "📖 Comandos disponibles\n\n" +
-			"/new [nombre]\n  Iniciar una nueva sesión\n\n" +
+			"/new [--dir <ruta>] [nombre]\n  Iniciar una nueva sesión, opcionalmente en otro directorio de trabajo\n\n" +
 			"/list\n  Listar sesiones del agente\n\n" +
 			"/switch <número>\n  Reanudar sesión por su número en la lista\n\n" +
 			"/delete <número>|1,2,3|3-7|1,3-5,8\n  Eliminar una o varias sesiones por número de lista\n\n" +
@@ -1164,7 +1165,7 @@ var messages = map[MsgKey]map[Language]string{
 	},
 	MsgHelpSessionSection: {
 		LangEnglish: "**Session Management**\n" +
-			"/new [name] — Start a new session\n" +
+			"/new [--dir <path>] [name] — Start a new session\n" +
 			"/list — List agent sessions\n" +
 			"/search <keyword> — Search sessions\n" +
 			"/switch <number> — Resume a session\n" +
@@ -1173,7 +1174,7 @@ var messages = map[MsgKey]map[Language]string{
 			"/current — Show active session\n" +
 			"/history [n] — Show last n messages",
 		LangChinese: "**会话管理**\n" +
-			"/new [名称] — 创建新会话\n" +
+			"/new [--dir <路径>] [名称] — 创建新会话\n" +
 			"/list — 列出会话列表\n" +
 			"/search <关键词> — 搜索会话\n" +
 			"/switch <序号> — 切换会话\n" +
@@ -1182,7 +1183,7 @@ var messages = map[MsgKey]map[Language]string{
 			"/current — 查看当前会话\n" +
 			"/history [n] — 查看最近 n 条消息",
 		LangTraditionalChinese: "**會話管理**\n" +
-			"/new [名稱] — 建立新會話\n" +
+			"/new [--dir <路徑>] [名稱] — 建立新會話\n" +
 			"/list — 列出會話列表\n" +
 			"/search <關鍵詞> — 搜尋會話\n" +
 			"/switch <序號> — 切換會話\n" +
@@ -1191,7 +1192,7 @@ var messages = map[MsgKey]map[Language]string{
 			"/current — 查看當前會話\n" +
 			"/history [n] — 查看最近 n 條訊息",
 		LangJapanese: "**セッション管理**\n" +
-			"/new [名前] — 新しいセッションを開始\n" +
+			"/new [--dir <パス>] [名前] — 新しいセッションを開始\n" +
 			"/list — セッション一覧\n" +
 			"/search <キーワード> — セッション検索\n" +
 			"/switch <番号> — セッション切り替え\n" +
@@ -1200,7 +1201,7 @@ var messages = map[MsgKey]map[Language]string{
 			"/current — 現在のセッションを表示\n" +
 			"/history [n] — 直近 n 件のメッセージを表示",
 		LangSpanish: "**Gestión de sesiones**\n" +
-			"/new [nombre] — Iniciar nueva sesión\n" +
+			"/new [--dir <ruta>] [nombre] — Iniciar nueva sesión\n" +
 			"/list — Listar sesiones\n" +
 			"/search <keyword> — Buscar sesiones\n" +
 			"/switch <número> — Reanudar sesión\n" +
@@ -2947,6 +2948,13 @@ var messages = map[MsgKey]map[Language]string{
 		LangTraditionalChinese: "✅ 新會話已建立：**%s**",
 		LangJapanese:           "✅ 新しいセッションを作成しました：**%s**",
 		LangSpanish:            "✅ Nueva sesión creada: **%s**",
+	},
+	MsgNewSessionUsage: {
+		LangEnglish:            "Usage: `/new [--dir <path>] [name]`\nExample: `/new --dir ../project bug fix`",
+		LangChinese:            "用法: `/new [--dir <路径>] [名称]`\n示例: `/new --dir ../project 修复问题`",
+		LangTraditionalChinese: "用法: `/new [--dir <路徑>] [名稱]`\n範例: `/new --dir ../project 修復問題`",
+		LangJapanese:           "使い方: `/new [--dir <パス>] [名前]`\n例: `/new --dir ../project バグ修正`",
+		LangSpanish:            "Uso: `/new [--dir <ruta>] [nombre]`\nEjemplo: `/new --dir ../project arreglo de bug`",
 	},
 	MsgSessionAutoResetIdle: {
 		LangEnglish:            "⏰ Session auto-reset after %d minute(s) of inactivity.",

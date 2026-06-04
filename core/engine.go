@@ -5461,10 +5461,36 @@ func (e *Engine) handleWorkspaceCommand(p Platform, msg *Message, args []string)
 }
 
 func (e *Engine) cmdNew(p Platform, msg *Message, args []string) {
-	_, sessions, interactiveKey, err := e.commandContext(p, msg)
+	name, dirArgs, usage := parseNewCommandArgs(args)
+	if usage {
+		e.reply(p, msg.ReplyCtx, e.i18n.T(MsgNewSessionUsage))
+		return
+	}
+	if len(dirArgs) > 0 {
+		if e.isCommandDisabledForUser("dir", msg.UserID) {
+			e.reply(p, msg.ReplyCtx, fmt.Sprintf(e.i18n.T(MsgCommandDisabled), "/dir"))
+			return
+		}
+		if !e.isAdmin(msg.UserID) {
+			e.reply(p, msg.ReplyCtx, fmt.Sprintf(e.i18n.T(MsgAdminRequired), "/dir"))
+			return
+		}
+	}
+
+	agent, sessions, interactiveKey, err := e.commandContext(p, msg)
 	if err != nil {
 		e.reply(p, msg.ReplyCtx, e.i18n.Tf(MsgWsResolutionError, err))
 		return
+	}
+
+	dirSuccess := ""
+	if len(dirArgs) > 0 {
+		errMsg, successMsg := e.dirApply(agent, sessions, interactiveKey, msg.SessionKey, dirArgs)
+		if errMsg != "" {
+			e.reply(p, msg.ReplyCtx, errMsg)
+			return
+		}
+		dirSuccess = successMsg
 	}
 
 	slog.Info("cmdNew: cleaning up old session", "session_key", msg.SessionKey)
@@ -5477,16 +5503,61 @@ func (e *Engine) cmdNew(p Platform, msg *Message, args []string) {
 	old.ClearHistory()
 	sessions.Save()
 
-	name := ""
-	if len(args) > 0 {
-		name = strings.Join(args, " ")
-	}
 	sessions.NewSession(msg.SessionKey, name)
+	reply := e.i18n.T(MsgNewSessionCreated)
 	if name != "" {
-		e.reply(p, msg.ReplyCtx, fmt.Sprintf(e.i18n.T(MsgNewSessionCreatedName), name))
-	} else {
-		e.reply(p, msg.ReplyCtx, e.i18n.T(MsgNewSessionCreated))
+		reply = fmt.Sprintf(e.i18n.T(MsgNewSessionCreatedName), name)
 	}
+	if dirSuccess != "" {
+		reply += "\n\n" + dirSuccess
+	}
+	e.reply(p, msg.ReplyCtx, reply)
+}
+
+func parseNewCommandArgs(args []string) (name string, dirArgs []string, usage bool) {
+	var nameParts []string
+	for i := 0; i < len(args); i++ {
+		arg := strings.TrimSpace(args[i])
+		lower := strings.ToLower(arg)
+		switch {
+		case lower == "help" || lower == "-h" || lower == "--help":
+			return "", nil, true
+		case lower == "--dir" || lower == "--cwd" || lower == "-d":
+			if i+1 >= len(args) {
+				return "", nil, true
+			}
+			i++
+			dirArgs = []string{args[i]}
+		case strings.HasPrefix(lower, "--dir="):
+			dir := arg[len("--dir="):]
+			if strings.TrimSpace(dir) == "" {
+				return "", nil, true
+			}
+			dirArgs = []string{dir}
+		case strings.HasPrefix(lower, "--cwd="):
+			dir := arg[len("--cwd="):]
+			if strings.TrimSpace(dir) == "" {
+				return "", nil, true
+			}
+			dirArgs = []string{dir}
+		default:
+			nameParts = append(nameParts, args[i])
+		}
+	}
+	return strings.Join(nameParts, " "), dirArgs, false
+}
+
+func (e *Engine) isCommandDisabledForUser(command, userID string) bool {
+	e.userRolesMu.RLock()
+	disabledCmds := e.disabledCmds
+	urm := e.userRoles
+	e.userRolesMu.RUnlock()
+	if urm != nil {
+		if role := urm.ResolveRole(userID); role != nil {
+			disabledCmds = role.DisabledCmds
+		}
+	}
+	return disabledCmds[strings.ToLower(command)]
 }
 
 // applySessionFilter conditionally filters agent sessions based on the
@@ -9508,7 +9579,7 @@ func (e *Engine) SendToSessionWithAttachments(sessionKey, message string, images
 			return err
 		}
 		// Use AtMentionSender when @users specified and platform supports it
-		if (len(atUsers) > 0 || atAll) {
+		if len(atUsers) > 0 || atAll {
 			if atSender, ok := p.(AtMentionSender); ok {
 				if err := atSender.ReplyWithAt(e.ctx, replyCtx, message, atUsers, atAll); err != nil {
 					return err
