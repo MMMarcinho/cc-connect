@@ -25,13 +25,6 @@ type ReplyContextReconstructor interface {
 	ReconstructReplyCtx(sessionKey string) (any, error)
 }
 
-// SessionAliasProvider is an optional interface for platforms whose incoming
-// session key may differ from a proactive send key while still identifying the
-// same conversation target.
-type SessionAliasProvider interface {
-	SessionAliases(sessionKey string) []string
-}
-
 // MessageRecallDetector is an optional interface for platforms that can check
 // whether the message targeted by a reply context was recalled/deleted.
 type MessageRecallDetector interface {

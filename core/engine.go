@@ -2596,6 +2596,7 @@ func (e *Engine) handleMessage(p Platform, msg *Message) {
 	var wsSessions *SessionManager
 	var resolvedWorkspace string
 	if forcedWorkDir := e.sendWorkDirForSession(msg.SessionKey); forcedWorkDir != "" {
+		e.bindSendWorkDir(msg.SessionKey, forcedWorkDir)
 		var err error
 		wsAgent, wsSessions, err = e.getOrCreateWorkspaceAgent(forcedWorkDir)
 		if err != nil {
@@ -15616,7 +15617,10 @@ func (e *Engine) bindSendWorkDir(sessionKey, workDir string) {
 	if sessionKey == "" || workDir == "" {
 		return
 	}
-	keys := append([]string{sessionKey}, e.sessionAliasesForKey(sessionKey)...)
+	keys := []string{sessionKey}
+	if participantKey := directParticipantKeyForSession(sessionKey); participantKey != "" {
+		keys = append(keys, participantKey)
+	}
 	e.sendWorkDirMu.Lock()
 	defer e.sendWorkDirMu.Unlock()
 	if e.sendWorkDirs == nil {
@@ -15633,50 +15637,28 @@ func (e *Engine) sendWorkDirForSession(sessionKey string) string {
 	if sessionKey == "" {
 		return ""
 	}
-	aliases := e.sessionAliasesForKey(sessionKey)
+	participantKey := directParticipantKeyForSession(sessionKey)
 	e.sendWorkDirMu.RLock()
 	defer e.sendWorkDirMu.RUnlock()
 	if workDir := e.sendWorkDirs[sessionKey]; workDir != "" {
 		return workDir
 	}
-	for _, alias := range aliases {
-		if workDir := e.sendWorkDirs[alias]; workDir != "" {
-			return workDir
-		}
+	if participantKey != "" {
+		return e.sendWorkDirs[participantKey]
 	}
 	return ""
 }
 
-func (e *Engine) sessionAliasesForKey(sessionKey string) []string {
+func directParticipantKeyForSession(sessionKey string) string {
 	platformName := extractPlatformName(sessionKey)
 	if platformName == "" {
-		return nil
+		return ""
 	}
-	for _, p := range e.platforms {
-		if p.Name() != platformName {
-			continue
-		}
-		provider, ok := p.(SessionAliasProvider)
-		if !ok {
-			return nil
-		}
-		aliases := provider.SessionAliases(sessionKey)
-		if len(aliases) == 0 {
-			return nil
-		}
-		out := make([]string, 0, len(aliases))
-		seen := map[string]bool{sessionKey: true}
-		for _, alias := range aliases {
-			alias = strings.TrimSpace(alias)
-			if alias == "" || seen[alias] {
-				continue
-			}
-			seen[alias] = true
-			out = append(out, alias)
-		}
-		return out
+	parts := strings.SplitN(sessionKey, ":", 5)
+	if len(parts) < 4 || parts[1] != "d" || strings.TrimSpace(parts[3]) == "" {
+		return ""
 	}
-	return nil
+	return platformName + ":direct-user:" + strings.TrimSpace(parts[3])
 }
 
 // workspaceFromLiveState extracts the workspace path embedded in a live

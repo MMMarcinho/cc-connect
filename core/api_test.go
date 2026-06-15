@@ -281,20 +281,8 @@ func TestHandleSend_WorkDirStartsSideSession(t *testing.T) {
 	}
 }
 
-type sendAliasPlatform struct {
-	stubCronReplyTargetPlatform
-}
-
-func (p *sendAliasPlatform) SessionAliases(sessionKey string) []string {
-	userID := extractUserID(sessionKey)
-	if userID == "" {
-		return nil
-	}
-	return []string{"test:direct-user:" + userID}
-}
-
-func TestHandleSend_WorkDirFollowsProactiveAliasOnInboundSession(t *testing.T) {
-	agentName := "test-send-workdir-alias-agent"
+func TestHandleSend_WorkDirFollowsDirectParticipantOnInboundSession(t *testing.T) {
+	agentName := "test-send-workdir-direct-agent"
 	baseDir := t.TempDir()
 	targetDir := t.TempDir()
 	syntheticKey := "test:d:proactive:user1"
@@ -311,10 +299,8 @@ func TestHandleSend_WorkDirFollowsProactiveAliasOnInboundSession(t *testing.T) {
 		}, nil
 	})
 
-	platform := &sendAliasPlatform{
-		stubCronReplyTargetPlatform: stubCronReplyTargetPlatform{
-			stubPlatformEngine: stubPlatformEngine{n: "test"},
-		},
+	platform := &stubCronReplyTargetPlatform{
+		stubPlatformEngine: stubPlatformEngine{n: "test"},
 	}
 	engine := NewEngine(
 		"test",
