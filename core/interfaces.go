@@ -78,7 +78,7 @@ Your normal text responses are automatically delivered to the user — just repl
 
 ## Available tools
 
-### Send generated images or files back to the user
+### Send generated images, files, or voice messages back to the user
 When you generate a local image or file that should be sent to the user, use:
 
   cc-connect send --image /absolute/path/to/image.png
@@ -88,7 +88,38 @@ When you generate a local image or file that should be sent to the user, use:
 You may repeat --image / --file multiple times. Use this only for generated attachments that need to be delivered to the user.
 If you include --message, do not repeat the exact same sentence again in your normal reply, because your normal reply is also delivered automatically.
 
-### Scheduled tasks (cron)
+When sending an audio (mp3/wav/m4a/ogg/opus) or video (mp4/mov/webm) clip that should render inline as a native voice bubble or video player — instead of as a generic file download — use the dedicated flags:
+
+  cc-connect send --audio /absolute/path/to/clip.mp3
+  cc-connect send --video /absolute/path/to/demo.mp4
+
+These render as native media on platforms that support it (e.g. Feishu voice bubbles, Telegram voice messages). cc-connect transparently transcodes audio to the platform's preferred codec (e.g. opus for Feishu). On platforms without dedicated audio/video support cc-connect automatically falls back to the file-attachment path so delivery is preserved. Do NOT downgrade the user's request to --file when they explicitly asked for audio or video.
+
+When the user explicitly asks you to synthesize speech from text, use:
+
+  cc-connect send --tts "text to speak"
+
+After cc-connect send --tts (or --audio) succeeds, reply only with NO_REPLY unless the user also asked for a visible text confirmation. This prevents sending an extra text message after the voice message.
+
+### Scheduled tasks: when to use /cron vs /timer
+
+cc-connect has TWO distinct scheduling commands. Picking the wrong one creates a confusing UX for the user.
+
+  ┌──────────────────────────────┬─────────────────────────────┐
+  │ Use cc-connect cron …        │ Use cc-connect timer …      │
+  ├──────────────────────────────┼─────────────────────────────┤
+  │ Recurring schedule           │ One-shot delay / one-time   │
+  │ "每天/每周/每小时"            │ "X 分钟后/小时后/明天"        │
+  │ "every day/week/Monday"      │ "in 30 min", "tomorrow 9am"  │
+  │ "每天早上6点总结"             │ "3 分钟后检查负载"            │
+  │ Lives forever until deleted  │ Auto-archives after firing  │
+  │ Queried via /cron            │ Queried via /timer          │
+  └──────────────────────────────┴─────────────────────────────┘
+
+When telling the user the task is scheduled, tell them which command to use to view/manage it
+(say "use /timer to view" for one-shot, "use /cron to view" for recurring).
+
+### Scheduled tasks (cron) — RECURRING
 When the user asks you to do something on a schedule (e.g. "每天早上6点帮我总结GitHub trending"), use the Bash tool to run:
 
   cc-connect cron add --cron "<min> <hour> <day> <month> <weekday>" --prompt "<task description>" --desc "<short label>"
@@ -105,13 +136,15 @@ Examples:
   cc-connect cron add --cron "0 9 * * 1" --prompt "Generate a weekly project status report" --desc "Weekly Report"
   cc-connect cron add --cron "*/2 * * * *" --exec "ipconfig" --session-mode new-per-run --desc "Every 2 min ipconfig"
 
-You can also list, inspect, edit, or delete cron jobs:
+You can also list, inspect, run, edit, or delete cron jobs:
   cc-connect cron list
   cc-connect cron info <job-id> [field]
+  cc-connect cron exec <job-id>
   cc-connect cron edit <job-id> <field> <value>
   cc-connect cron del <job-id>
 
 When changing an existing job, first run ` + "`cc-connect cron info <job-id>`" + ` to inspect the current values, then use ` + "`cron edit`" + ` for only the field(s) the user asked to change.
+Use ` + "`cron exec <job-id>`" + ` to run an existing scheduled task immediately; this is different from the ` + "`--exec <command>`" + ` flag used when creating a shell-command cron job.
 Use ` + "`cron edit`" + ` instead of delete-and-recreate when only one field changes. Do not delete and recreate a job unless the user explicitly asks to replace it.
 Common editable fields:
   cron_expr     new schedule, e.g. "0 9 * * *"
@@ -123,9 +156,42 @@ Common editable fields:
 Run ` + "`cc-connect cron edit --help`" + ` for the full field list.
 
 Examples:
+  cc-connect cron exec abc123
   cc-connect cron edit abc123 cron_expr "0 9 * * *"
   cc-connect cron edit abc123 enabled false
   cc-connect cron edit abc123 prompt "Updated daily summary task"
+
+### One-shot timers (timer) — ONE-TIME DELAY
+When the user asks you to do something AFTER A DELAY or AT A SPECIFIC FUTURE TIME
+(e.g. "两小时后帮我检查PR", "3 分钟后看下系统负载", "明天早上 9 点提醒我"),
+use the Bash tool to run:
+
+  cc-connect timer add --delay <duration> --prompt "<task description>"
+
+IMPORTANT: do NOT use cron for one-shot delays. A cron expression like "4 19 14 6 *"
+means "every year on June 14 at 19:04", not "once on this date". Cron has no built-in
+"fire once" mode — use timer for any one-time / delayed request.
+
+Duration examples: 30m, 2h, 1h30m. Or use absolute time: --at "2026-05-16T09:00"
+Absolute times without timezone (e.g. "2026-05-16T09:00") are interpreted as the
+system's local timezone. When the user says "明天早上9点", use local time.
+Environment variables CC_PROJECT and CC_SESSION_KEY are already set.
+
+Optional flags:
+  --exec <command>          run a shell command directly instead of --prompt
+  --desc <text>             short description
+  --session-mode <mode>     reuse (default) or new-per-run (fresh session each run)
+  --timeout-mins <n>        max wait per run in minutes (default 30, 0 = unlimited)
+  --mute                    suppress all messages (start notification + result)
+
+Examples:
+  cc-connect timer add --delay 2h --prompt "Check PR status" --desc "PR check"
+  cc-connect timer add --delay 30m --exec "df -h" --desc "Disk check"
+  cc-connect timer add --at "2026-05-16T09:00" --prompt "Morning standup reminder"
+
+You can also list or cancel timers:
+  cc-connect timer list
+  cc-connect timer del <timer-id>
 
 ### Bot-to-bot relay
 When you need to communicate with another bot (e.g. ask another AI agent a question), use:
@@ -164,6 +230,22 @@ type SystemPromptSupporter interface {
 	HasSystemPromptSupport() bool
 }
 
+// SessionIDValidator is an optional interface for agents that can validate
+// whether a stored session ID actually belongs to the current project's
+// session store. The engine uses this to prevent cross-project session
+// context leakage (issue #599): a stale ID from another project's workspace
+// would otherwise resume the wrong conversation history.
+//
+// Implementations should return false when:
+//   - the session ID is empty
+//   - the session file does not exist under the agent's per-project store
+//   - the agent cannot determine the current project directory
+//
+// The engine treats a false return as "clear the stored ID and start fresh".
+type SessionIDValidator interface {
+	ValidateSessionID(ctx context.Context, sessionID string) bool
+}
+
 // TypingIndicator is an optional interface for platforms that can show a
 // "processing" indicator (typing bubble, emoji reaction, etc.) while the
 // agent is working. StartTyping is called when processing begins and returns
@@ -180,6 +262,13 @@ type TypingIndicatorDone interface {
 	AddDoneReaction(replyCtx any)
 }
 
+// AtMentionSender is an optional interface for platforms that support @mention in
+// reply messages (e.g. DingTalk). Platforms that implement this interface can
+// include @user notifications when replying in group chats.
+type AtMentionSender interface {
+	ReplyWithAt(ctx context.Context, replyCtx any, content string, atUsers []string, atAll bool) error
+}
+
 // ImageSender is an optional interface for platforms that support sending images.
 type ImageSender interface {
 	SendImage(ctx context.Context, replyCtx any, img ImageAttachment) error
@@ -193,6 +282,22 @@ type FileSender interface {
 // MessageUpdater is an optional interface for platforms that support updating messages.
 type MessageUpdater interface {
 	UpdateMessage(ctx context.Context, replyCtx any, content string) error
+}
+
+// StatusFooterSender is an optional Platform extension for sending a reply
+// with a structured per-turn status footer rendered using platform-specific
+// dim/small styling (e.g. Lark `text_size: "notation"`). Platforms that do
+// not implement it fall back to receiving the footer appended inline to the
+// content via Send/SendWithButtons/...
+type StatusFooterSender interface {
+	SendWithStatusFooter(ctx context.Context, replyCtx any, content, footer string) error
+}
+
+// StatusFooterUpdater is the streaming-preview counterpart of
+// StatusFooterSender: it patches an existing preview message with a final
+// content + structured status footer block.
+type StatusFooterUpdater interface {
+	UpdateMessageWithStatusFooter(ctx context.Context, replyCtx any, content, footer string) error
 }
 
 // ProgressStyleProvider is an optional interface for platforms that expose
@@ -436,13 +541,14 @@ type ContextUsage struct {
 	// BaselineTokens is the portion of the context window always occupied by
 	// fixed runtime/system instructions and therefore excluded from user-visible
 	// "left" calculations when the agent provides it.
-	BaselineTokens        int
-	TotalTokens           int
-	InputTokens           int
-	CachedInputTokens     int
-	OutputTokens          int
-	ReasoningOutputTokens int
-	ContextWindow         int
+	BaselineTokens           int
+	TotalTokens              int
+	InputTokens              int
+	CachedInputTokens        int // cache-read tokens (prior context retrieved from cache)
+	CacheCreationInputTokens int // cache-write tokens (new content written to cache)
+	OutputTokens             int
+	ReasoningOutputTokens    int
+	ContextWindow            int
 }
 
 // ContextCompressor is an optional interface for agents that support
@@ -516,6 +622,15 @@ type WorkspaceAgentOptionSnapshotter interface {
 // apply a mode change immediately without restarting the process.
 type LiveModeSwitcher interface {
 	SetLiveMode(mode string) bool
+}
+
+// StartupWarner is an optional interface for agent sessions that need to surface
+// a one-time warning to the IM user at session start (e.g. when a requested
+// permission mode was silently downgraded due to OS constraints). The engine
+// sends the returned message to the IM platform immediately after starting the
+// session. Returns empty string when no warning is needed.
+type StartupWarner interface {
+	StartupWarning() string
 }
 
 // PermissionModeInfo describes a permission mode for display.

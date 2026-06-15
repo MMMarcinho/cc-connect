@@ -10,6 +10,7 @@ import (
 	"mime/multipart"
 	"net/http"
 	"os/exec"
+	"regexp"
 	"strings"
 	"sync"
 	"time"
@@ -257,6 +258,7 @@ func (p *Platform) onMessage(data *chatbot.BotCallbackDataModel, richText *richT
 
 	if !core.AllowList(p.allowFrom, data.SenderStaffId) {
 		slog.Debug("dingtalk: message from unauthorized user", "user", data.SenderStaffId)
+		p.replyUnauthorized(data)
 		return
 	}
 
@@ -313,6 +315,14 @@ func (p *Platform) onMessage(data *chatbot.BotCallbackDataModel, richText *richT
 		return
 	}
 
+	// Handle file messages (PDF, txt, docx, …). Same downloadCode mechanism as
+	// images, but the payload also carries fileName / fileSize that we surface
+	// to the agent via core.FileAttachment.FileName.
+	if data.Msgtype == "file" {
+		p.handleFileMessage(data, sessionKey)
+		return
+	}
+
 	// Extract message content, recovering quoted/reply info from richText.
 	messageContent := data.Text.Content
 	if richText != nil && richText.IsReplyMsg && richText.RepliedMsg != nil {
@@ -340,6 +350,23 @@ func (p *Platform) onMessage(data *chatbot.BotCallbackDataModel, richText *richT
 	}
 
 	p.handler(p, msg)
+}
+
+func (p *Platform) replyUnauthorized(data *chatbot.BotCallbackDataModel) {
+	if data == nil || data.SessionWebhook == "" {
+		return
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	err := p.Reply(ctx, replyContext{
+		sessionWebhook: data.SessionWebhook,
+		conversationId: data.ConversationId,
+		senderStaffId:  data.SenderStaffId,
+		isGroup:        data.ConversationType == "2",
+	}, core.UnauthorizedAccessMessage)
+	if err != nil {
+		slog.Warn("dingtalk: unauthorized reply failed", "error", err)
+	}
 }
 
 // extractRichText extracts plain text from a DingTalk richText content payload.
@@ -470,7 +497,7 @@ func (p *Platform) handleImageMessage(data *chatbot.BotCallbackDataModel, sessio
 		slog.Error("dingtalk: failed to download image", "error", err)
 		return
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	if resp.StatusCode != http.StatusOK {
 		slog.Error("dingtalk: image download returned status", "status", resp.StatusCode)
@@ -517,6 +544,90 @@ func (p *Platform) handleImageMessage(data *chatbot.BotCallbackDataModel, sessio
 	p.handler(p, msg)
 }
 
+// handleFileMessage downloads a file attachment (msgtype=file) and dispatches
+// it to the engine as a core.FileAttachment so the agent can read its contents.
+// Mirrors handleImageMessage but uses a larger size cap (50 MiB) and preserves
+// the file name reported by DingTalk.
+func (p *Platform) handleFileMessage(data *chatbot.BotCallbackDataModel, sessionKey string) {
+	slog.Debug("dingtalk: file message received", "user", data.SenderNick)
+
+	fileData, ok := data.Content.(map[string]interface{})
+	if !ok {
+		slog.Error("dingtalk: invalid file content type", "type", fmt.Sprintf("%T", data.Content))
+		return
+	}
+
+	downloadCode, _ := fileData["downloadCode"].(string)
+	if downloadCode == "" {
+		slog.Error("dingtalk: file message missing downloadCode")
+		return
+	}
+
+	fileName, _ := fileData["fileName"].(string)
+
+	downloadURL, err := p.getDownloadURL(downloadCode)
+	if err != nil {
+		slog.Error("dingtalk: failed to get file download URL", "error", err)
+		return
+	}
+
+	resp, err := p.httpClient.Get(downloadURL)
+	if err != nil {
+		slog.Error("dingtalk: failed to download file", "error", err)
+		return
+	}
+	defer func() { _ = resp.Body.Close() }()
+
+	if resp.StatusCode != http.StatusOK {
+		slog.Error("dingtalk: file download returned status", "status", resp.StatusCode)
+		return
+	}
+
+	// DingTalk caps single file at 100 MiB; 50 MiB is plenty for agent inputs
+	// and matches what other platforms accept without OOM risk.
+	const maxFileBytes = 50 * 1024 * 1024
+	fileBytes, err := io.ReadAll(io.LimitReader(resp.Body, maxFileBytes+1))
+	if err != nil {
+		slog.Error("dingtalk: failed to read file data", "error", err)
+		return
+	}
+	if len(fileBytes) > maxFileBytes {
+		slog.Error("dingtalk: file too large, dropping", "size", len(fileBytes), "limit", maxFileBytes, "file_name", fileName)
+		return
+	}
+
+	mimeType := resp.Header.Get("Content-Type")
+	if mimeType == "" {
+		mimeType = "application/octet-stream"
+	}
+
+	slog.Info("dingtalk: file downloaded successfully", "size", len(fileBytes), "mime", mimeType, "file_name", fileName)
+
+	msg := &core.Message{
+		SessionKey: sessionKey,
+		Platform:   "dingtalk",
+		UserID:     data.SenderStaffId,
+		UserName:   data.SenderNick,
+		ChatName:   data.ConversationTitle,
+		MessageID:  data.MsgId,
+		ChannelKey: data.ConversationId,
+		ReplyCtx: replyContext{
+			sessionWebhook: data.SessionWebhook,
+			conversationId: data.ConversationId,
+			senderStaffId:  data.SenderStaffId,
+			messageID:      data.MsgId,
+			isGroup:        data.ConversationType == "2",
+		},
+		Files: []core.FileAttachment{{
+			MimeType: mimeType,
+			Data:     fileBytes,
+			FileName: fileName,
+		}},
+	}
+
+	p.handler(p, msg)
+}
+
 func (p *Platform) downloadAudio(downloadCode string) ([]byte, string, error) {
 	// Get download URL
 	downloadURL, err := p.getDownloadURL(downloadCode)
@@ -529,7 +640,7 @@ func (p *Platform) downloadAudio(downloadCode string) ([]byte, string, error) {
 	if err != nil {
 		return nil, "", fmt.Errorf("http get: %w", err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	if resp.StatusCode != http.StatusOK {
 		return nil, "", fmt.Errorf("download returned status %d", resp.StatusCode)
@@ -580,7 +691,7 @@ func (p *Platform) getDownloadURL(downloadCode string) (string, error) {
 	if err != nil {
 		return "", fmt.Errorf("do request: %w", err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	if resp.StatusCode != http.StatusOK {
 		return "", fmt.Errorf("api returned status %d", resp.StatusCode)
@@ -632,7 +743,7 @@ func (p *Platform) getAccessToken() (string, error) {
 	if err != nil {
 		return "", fmt.Errorf("do request: %w", err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	if resp.StatusCode != http.StatusOK {
 		body, _ := io.ReadAll(resp.Body)
@@ -671,22 +782,26 @@ func (p *Platform) getAccessToken() (string, error) {
 	return p.accessToken, nil
 }
 
-func (p *Platform) Reply(ctx context.Context, rctx any, content string) error {
+// ReplyWithAt sends a reply with @mention support. Uses text msgtype (not markdown)
+// because only text type supports highlighted/blue @mentions in DingTalk.
+func (p *Platform) ReplyWithAt(ctx context.Context, rctx any, content string, atUsers []string, atAll bool) error {
 	rc, ok := rctx.(replyContext)
 	if !ok {
 		return fmt.Errorf("dingtalk: invalid reply context type %T", rctx)
 	}
-
-	// Fall back to proactive API when sessionWebhook is unavailable
 	if rc.proactive || rc.sessionWebhook == "" {
 		return p.sendProactiveMessage(ctx, rc, content)
 	}
 
-	content = preprocessDingTalkMarkdown(content)
-
 	payload := map[string]any{
-		"msgtype":  "markdown",
-		"markdown": map[string]string{"title": "reply", "text": content},
+		"msgtype": "text",
+		"text":    map[string]string{"content": content},
+	}
+	if len(atUsers) > 0 || atAll {
+		payload["at"] = map[string]any{
+			"atUserIds": atUsers,
+			"isAtAll":   atAll,
+		}
 	}
 	body, err := json.Marshal(payload)
 	if err != nil {
@@ -703,7 +818,55 @@ func (p *Platform) Reply(ctx context.Context, rctx any, content string) error {
 	if err != nil {
 		return fmt.Errorf("dingtalk: send reply: %w", err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
+
+	if resp.StatusCode != http.StatusOK {
+		return fmt.Errorf("dingtalk: reply returned status %d", resp.StatusCode)
+	}
+	return nil
+}
+
+func (p *Platform) Reply(ctx context.Context, rctx any, content string) error {
+	rc, ok := rctx.(replyContext)
+	if !ok {
+		return fmt.Errorf("dingtalk: invalid reply context type %T", rctx)
+	}
+
+	// Fall back to proactive API when sessionWebhook is unavailable
+	if rc.proactive || rc.sessionWebhook == "" {
+		return p.sendProactiveMessage(ctx, rc, content)
+	}
+
+	atUserIds := extractAtUserIds(content)
+
+	content = preprocessDingTalkMarkdown(content)
+
+	payload := map[string]any{
+		"msgtype":  "markdown",
+		"markdown": map[string]string{"title": "reply", "text": content},
+	}
+	if len(atUserIds) > 0 {
+		payload["at"] = map[string]any{
+			"atUserIds": atUserIds,
+			"isAtAll":   false,
+		}
+	}
+	body, err := json.Marshal(payload)
+	if err != nil {
+		return fmt.Errorf("dingtalk: marshal reply: %w", err)
+	}
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, rc.sessionWebhook, bytes.NewReader(body))
+	if err != nil {
+		return fmt.Errorf("dingtalk: create request: %w", err)
+	}
+	req.Header.Set("Content-Type", "application/json")
+
+	resp, err := core.HTTPClient.Do(req)
+	if err != nil {
+		return fmt.Errorf("dingtalk: send reply: %w", err)
+	}
+	defer func() { _ = resp.Body.Close() }()
 
 	if resp.StatusCode != http.StatusOK {
 		return fmt.Errorf("dingtalk: reply returned status %d", resp.StatusCode)
@@ -886,7 +1049,7 @@ func (p *Platform) SendImage(ctx context.Context, rctx any, img core.ImageAttach
 	if err != nil {
 		return fmt.Errorf("dingtalk: send image request: %w", err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	respBody, _ := io.ReadAll(resp.Body)
 	slog.Debug("dingtalk: oToMessages image response", "status", resp.StatusCode, "body", string(respBody))
@@ -981,7 +1144,7 @@ func (p *Platform) SendFile(ctx context.Context, rctx any, file core.FileAttachm
 	if err != nil {
 		return fmt.Errorf("dingtalk: send file request: %w", err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	respBody, _ := io.ReadAll(resp.Body)
 	slog.Debug("dingtalk: oToMessages file response", "status", resp.StatusCode, "body", string(respBody))
@@ -1106,7 +1269,7 @@ func (p *Platform) SendAudio(ctx context.Context, rctx any, audio []byte, format
 	if err != nil {
 		return fmt.Errorf("dingtalk: send audio request: %w", err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	respBody, _ := io.ReadAll(resp.Body)
 	slog.Debug("dingtalk: oToMessages API response", "status", resp.StatusCode, "body", string(respBody))
@@ -1197,7 +1360,7 @@ func (p *Platform) uploadMedia(ctx context.Context, data []byte, fileName, media
 	if err != nil {
 		return "", fmt.Errorf("upload request: %w", err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	respBody, err := io.ReadAll(resp.Body)
 	if err != nil {
@@ -1529,7 +1692,7 @@ func (p *Platform) sendProactiveMessage(ctx context.Context, rc replyContext, co
 	if err != nil {
 		return fmt.Errorf("dingtalk: proactive send request: %w", err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	respBody, _ := io.ReadAll(resp.Body)
 	if resp.StatusCode != http.StatusOK {
@@ -1538,6 +1701,23 @@ func (p *Platform) sendProactiveMessage(ctx context.Context, rc replyContext, co
 
 	slog.Debug("dingtalk: proactive message sent", "api", apiURL, "status", resp.StatusCode)
 	return nil
+}
+
+var atUserIDRegexp = regexp.MustCompile(`@(\d{4,})`)
+
+// extractAtUserIds extracts @userId patterns from content for DingTalk's atUserIds field.
+// Matches @ followed by numeric DingTalk user IDs (e.g. @194252073827812352).
+func extractAtUserIds(content string) []string {
+	matches := atUserIDRegexp.FindAllStringSubmatch(content, -1)
+	seen := make(map[string]bool)
+	var ids []string
+	for _, m := range matches {
+		if len(m) > 1 && !seen[m[1]] {
+			seen[m[1]] = true
+			ids = append(ids, m[1])
+		}
+	}
+	return ids
 }
 
 // preprocessDingTalkMarkdown adapts content for DingTalk's markdown renderer:

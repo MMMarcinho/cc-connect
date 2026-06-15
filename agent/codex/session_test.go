@@ -48,7 +48,10 @@ func TestBuildExecArgs_IncludesReasoningEffort(t *testing.T) {
 	want := []string{
 		"exec",
 		"--skip-git-repo-check",
-		"--full-auto",
+		"--sandbox",
+		"workspace-write",
+		"-c",
+		`approval_policy="never"`,
 		"--model",
 		"o3",
 		"-c",
@@ -115,6 +118,136 @@ func TestBuildExecArgs_ResumeOmitsCdFlag(t *testing.T) {
 	// --json and stdin marker must still be present.
 	if !containsSequence(args, []string{"--json", "-"}) {
 		t.Fatalf("resume args missing --json + stdin marker: %v", args)
+	}
+}
+
+// TestBuildExecArgs_ModeMapping verifies each permission mode maps to the
+// correct codex CLI flags. Critical: codex exec has no approval IPC, so
+// approval_policy must always be "never" to avoid hanging on a TTY prompt
+// that this backend cannot answer.
+func TestBuildExecArgs_ModeMapping(t *testing.T) {
+	tests := []struct {
+		mode             string
+		wantSandbox      string // "" means no --sandbox flag (only yolo)
+		wantApproval     bool   // true means -c approval_policy="never" must be present
+		wantBypass       bool   // true means --dangerously-bypass-approvals-and-sandbox
+		wantNoFullAuto   bool   // always true: --full-auto is removed in codex 0.137+
+	}{
+		{mode: "suggest", wantSandbox: "read-only", wantApproval: true, wantNoFullAuto: true},
+		{mode: "auto-edit", wantSandbox: "workspace-write", wantApproval: true, wantNoFullAuto: true},
+		{mode: "full-auto", wantSandbox: "workspace-write", wantApproval: true, wantNoFullAuto: true},
+		{mode: "yolo", wantBypass: true, wantNoFullAuto: true},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.mode, func(t *testing.T) {
+			cs, err := newCodexSession(context.Background(), "codex", nil, "/tmp/project", "", "", tc.mode, "", "", nil, "")
+			if err != nil {
+				t.Fatalf("newCodexSession: %v", err)
+			}
+			args := cs.buildExecArgs("hi", nil)
+
+			if tc.wantSandbox != "" {
+				if !containsSequence(args, []string{"--sandbox", tc.wantSandbox}) {
+					t.Errorf("mode=%s missing --sandbox %s; args=%v", tc.mode, tc.wantSandbox, args)
+				}
+			}
+			if tc.wantApproval {
+				if !containsSequence(args, []string{"-c", `approval_policy="never"`}) {
+					t.Errorf("mode=%s missing approval_policy=never; args=%v", tc.mode, args)
+				}
+			}
+			if tc.wantBypass {
+				found := false
+				for _, a := range args {
+					if a == "--dangerously-bypass-approvals-and-sandbox" {
+						found = true
+						break
+					}
+				}
+				if !found {
+					t.Errorf("mode=%s missing --dangerously-bypass-approvals-and-sandbox; args=%v", tc.mode, args)
+				}
+			}
+			if tc.wantNoFullAuto {
+				for _, a := range args {
+					if a == "--full-auto" {
+						t.Errorf("mode=%s still emits deprecated --full-auto; args=%v", tc.mode, args)
+					}
+				}
+			}
+		})
+	}
+}
+
+// TestBuildExecArgs_ResumeUsesSandboxModeConfigOverride is the regression test
+// for the "codex exec resume" sandbox flag bug.
+//
+// codex CLI 0.137 limitation: `codex exec resume` does NOT accept the
+// `--sandbox <mode>` flag (only `codex exec` does). Both subcommands accept
+// `-c key=value` config overrides, so resume must express sandbox via
+// `-c sandbox_mode="..."` instead. Without this, every resume fails with:
+//
+//	error: unexpected argument '--sandbox' found
+//
+// silently destroying the user's session on cc-connect restart / idle reset.
+func TestBuildExecArgs_ResumeUsesSandboxModeConfigOverride(t *testing.T) {
+	tests := []struct {
+		mode            string
+		wantSandboxMode string // "" means no sandbox_mode override expected (yolo)
+		wantBypass      bool
+	}{
+		{mode: "suggest", wantSandboxMode: "read-only"},
+		{mode: "auto-edit", wantSandboxMode: "workspace-write"},
+		{mode: "full-auto", wantSandboxMode: "workspace-write"},
+		{mode: "yolo", wantBypass: true},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.mode, func(t *testing.T) {
+			cs, err := newCodexSession(context.Background(), "codex", nil, "/tmp/project", "", "", tc.mode, "thread-abc", "", nil, "")
+			if err != nil {
+				t.Fatalf("newCodexSession: %v", err)
+			}
+			args := cs.buildExecArgs("hi", nil)
+
+			// Sanity: this is a resume invocation.
+			if !containsSequence(args, []string{"exec", "resume", "--skip-git-repo-check"}) {
+				t.Fatalf("expected resume invocation, got: %v", args)
+			}
+
+			// Regression: --sandbox flag must NEVER appear in resume args.
+			// codex exec resume rejects it with: "unexpected argument '--sandbox' found".
+			for i, a := range args {
+				if a == "--sandbox" {
+					t.Errorf("mode=%s: resume args must not contain --sandbox (codex exec resume rejects it), but found at index %d: %v", tc.mode, i, args)
+				}
+			}
+
+			if tc.wantSandboxMode != "" {
+				want := `sandbox_mode="` + tc.wantSandboxMode + `"`
+				if !containsSequence(args, []string{"-c", want}) {
+					t.Errorf("mode=%s: resume args missing -c %s; args=%v", tc.mode, want, args)
+				}
+				// approval_policy must still be never for exec backend (no IPC).
+				if !containsSequence(args, []string{"-c", `approval_policy="never"`}) {
+					t.Errorf("mode=%s: resume args missing approval_policy=never; args=%v", tc.mode, args)
+				}
+			}
+
+			if tc.wantBypass {
+				found := false
+				for _, a := range args {
+					if a == "--dangerously-bypass-approvals-and-sandbox" {
+						found = true
+						break
+					}
+				}
+				if !found {
+					t.Errorf("mode=%s: resume args missing --dangerously-bypass-approvals-and-sandbox; args=%v", tc.mode, args)
+				}
+			}
+		})
 	}
 }
 
