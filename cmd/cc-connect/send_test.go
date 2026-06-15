@@ -3,6 +3,7 @@ package main
 import (
 	"os"
 	"path/filepath"
+	"reflect"
 	"testing"
 
 	"github.com/chenhg5/cc-connect/core"
@@ -72,6 +73,31 @@ func TestParseSendArgs_UsesSessionEnvFallback(t *testing.T) {
 	}
 	if req.SessionKey != "telegram:123:456" {
 		t.Fatalf("session = %q, want telegram:123:456", req.SessionKey)
+	}
+}
+
+func TestParseSendArgs_WorkDirOption(t *testing.T) {
+	workDir := t.TempDir()
+
+	req, _, err := parseSendArgs([]string{"--cwd", workDir, "--message", "please check"})
+	if err != nil {
+		t.Fatalf("parseSendArgs returned error: %v", err)
+	}
+	reqValue := reflect.ValueOf(req)
+	field := reqValue.FieldByName("WorkDir")
+	if !field.IsValid() {
+		t.Fatal("SendRequest is missing WorkDir")
+	}
+	if got := field.String(); got != workDir {
+		t.Fatalf("WorkDir = %q, want %q", got, workDir)
+	}
+
+	req, _, err = parseSendArgs([]string{"--work-dir", workDir, "please check"})
+	if err != nil {
+		t.Fatalf("parseSendArgs returned error for --work-dir: %v", err)
+	}
+	if got := reflect.ValueOf(req).FieldByName("WorkDir").String(); got != workDir {
+		t.Fatalf("WorkDir from --work-dir = %q, want %q", got, workDir)
 	}
 }
 

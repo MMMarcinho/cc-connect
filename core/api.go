@@ -31,6 +31,8 @@ type SendRequest struct {
 	Project    string            `json:"project"`
 	SessionKey string            `json:"session_key"`
 	Message    string            `json:"message"`
+	WorkDir    string            `json:"work_dir,omitempty"`
+	CWD        string            `json:"cwd,omitempty"`
 	Images     []ImageAttachment `json:"images,omitempty"`
 	Files      []FileAttachment  `json:"files,omitempty"`
 }
@@ -172,7 +174,11 @@ func (s *APIServer) handleSend(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if err := engine.SendToSessionWithAttachments(req.SessionKey, req.Message, req.Images, req.Files); err != nil {
+	workDir := req.WorkDir
+	if workDir == "" {
+		workDir = req.CWD
+	}
+	if err := engine.SendToSessionWithOptions(req.SessionKey, req.Message, req.Images, req.Files, SendOptions{WorkDir: workDir}); err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
