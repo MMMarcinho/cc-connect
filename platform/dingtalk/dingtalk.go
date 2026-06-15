@@ -1463,6 +1463,18 @@ func (p *Platform) ReconstructReplyCtx(sessionKey string) (any, error) {
 	}, nil
 }
 
+func (p *Platform) SessionAliases(sessionKey string) []string {
+	rctx, err := p.ReconstructReplyCtx(sessionKey)
+	if err != nil {
+		return nil
+	}
+	rc, ok := rctx.(replyContext)
+	if !ok || rc.isGroup || rc.senderStaffId == "" {
+		return nil
+	}
+	return []string{"dingtalk:direct-user:" + rc.senderStaffId}
+}
+
 // sendProactiveMessage sends a message using the DingTalk group/direct message API
 // instead of the temporary sessionWebhook. This enables cc-connect send, cron,
 // webhook, and other proactive messaging features.

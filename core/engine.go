@@ -13733,21 +13733,67 @@ func (e *Engine) bindSendWorkDir(sessionKey, workDir string) {
 	if sessionKey == "" || workDir == "" {
 		return
 	}
+	keys := append([]string{sessionKey}, e.sessionAliasesForKey(sessionKey)...)
 	e.sendWorkDirMu.Lock()
 	defer e.sendWorkDirMu.Unlock()
 	if e.sendWorkDirs == nil {
 		e.sendWorkDirs = make(map[string]string)
 	}
-	e.sendWorkDirs[sessionKey] = workDir
+	for _, key := range keys {
+		if key != "" {
+			e.sendWorkDirs[key] = workDir
+		}
+	}
 }
 
 func (e *Engine) sendWorkDirForSession(sessionKey string) string {
 	if sessionKey == "" {
 		return ""
 	}
+	aliases := e.sessionAliasesForKey(sessionKey)
 	e.sendWorkDirMu.RLock()
 	defer e.sendWorkDirMu.RUnlock()
-	return e.sendWorkDirs[sessionKey]
+	if workDir := e.sendWorkDirs[sessionKey]; workDir != "" {
+		return workDir
+	}
+	for _, alias := range aliases {
+		if workDir := e.sendWorkDirs[alias]; workDir != "" {
+			return workDir
+		}
+	}
+	return ""
+}
+
+func (e *Engine) sessionAliasesForKey(sessionKey string) []string {
+	platformName := extractPlatformName(sessionKey)
+	if platformName == "" {
+		return nil
+	}
+	for _, p := range e.platforms {
+		if p.Name() != platformName {
+			continue
+		}
+		provider, ok := p.(SessionAliasProvider)
+		if !ok {
+			return nil
+		}
+		aliases := provider.SessionAliases(sessionKey)
+		if len(aliases) == 0 {
+			return nil
+		}
+		out := make([]string, 0, len(aliases))
+		seen := map[string]bool{sessionKey: true}
+		for _, alias := range aliases {
+			alias = strings.TrimSpace(alias)
+			if alias == "" || seen[alias] {
+				continue
+			}
+			seen[alias] = true
+			out = append(out, alias)
+		}
+		return out
+	}
+	return nil
 }
 
 // workspaceFromLiveState extracts the workspace path embedded in a live

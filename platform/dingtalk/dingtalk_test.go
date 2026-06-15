@@ -679,6 +679,23 @@ func TestProactiveRouting_DirectSessionUsesDirectAPI(t *testing.T) {
 	}
 }
 
+func TestSessionAliases_DirectSessionUsesStaffID(t *testing.T) {
+	p := &Platform{}
+
+	got := p.SessionAliases("dingtalk:d:conv789:user111")
+	if len(got) != 1 || got[0] != "dingtalk:direct-user:user111" {
+		t.Fatalf("SessionAliases() = %#v, want direct user alias", got)
+	}
+}
+
+func TestSessionAliases_GroupSessionHasNoDirectAlias(t *testing.T) {
+	p := &Platform{}
+
+	if got := p.SessionAliases("dingtalk:g:conv123:user456"); len(got) != 0 {
+		t.Fatalf("SessionAliases() = %#v, want no direct alias", got)
+	}
+}
+
 // ──────────────────────────────────────────────────────────────
 // extractRichText tests (from main: richText message type support)
 // ──────────────────────────────────────────────────────────────
